@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 if (args.Length != 2 || args.Length > 0 && (args[0] == "--help" || args[0] == "-h")) {
@@ -8,8 +9,12 @@ if (args.Length != 2 || args.Length > 0 && (args[0] == "--help" || args[0] == "-
 var terraformPlanFileName = args[0];
 var terraformPolicyFileName = args[1];
 var planStream = new FileStream(terraformPlanFileName, FileMode.Open, FileAccess.Read);
-var policyStream = new FileStream(terraformPolicyFileName, FileMode.Open, FileAccess.Read);
-var policy = JsonSerializer.Deserialize<Policy>(policyStream, new JsonSerializerOptions { AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip, IncludeFields = true })!;
+var policy = GetPolicy(terraformPolicyFileName);
+[System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode", Justification = "This appears to be a bug?")]
+static Policy GetPolicy(string terraformPolicyFileName) {
+	var policyStream = new FileStream(terraformPolicyFileName, FileMode.Open, FileAccess.Read);
+	return JsonSerializer.Deserialize<Policy>(policyStream, new JsonSerializerOptions { AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip, IncludeFields = true, TypeInfoResolver = SourceGenerationContext.Default })!;
+}
 //Console.WriteLine(J(policy));
 
 var document = System.Text.Json.JsonDocument.Parse(planStream, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
@@ -221,6 +226,10 @@ static IEnumerable<DiffItem> Diff(string type, string address, JsonElement? befo
 }
 
 internal record struct DiffItem(string address, string before, string after) { }
+
+[JsonSourceGenerationOptions(WriteIndented = true)]
+[JsonSerializable(typeof(Policy))]
+internal partial class SourceGenerationContext : JsonSerializerContext { }
 
 public class Policy {
 	public PolicyElement[]? permittedDrifts;
