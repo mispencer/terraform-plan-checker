@@ -1,0 +1,38 @@
+name: Main
+
+on: push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v3
+      - name: Build
+        run: |
+          mkdir -p publish final;
+          for rid in "osx-arm64" "linux-x64" "win-x64"; do
+            dotnet publish -r $rid -o publish/$rid terraform-plan-checker.csproj;
+            if [[ $rid == "win-x64" ]]; then
+                suffix=".exe";
+            else
+                suffix="";
+            fi
+            mv "publish/$rid/terraform-plan-checker${suffix}" "final/terraform-plan-checker-${rid}${suffix}";
+          done
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: final/terraform-plan-checker-*
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: final/terraform-plan-checker-*
+          name: "latest"
+          tag_name: "latest"
