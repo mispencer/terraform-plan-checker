@@ -13,9 +13,9 @@ var policy = JsonSerializer.Deserialize<Policy>(policyStream, new JsonSerializer
 //Console.WriteLine(J(policy));
 
 var document = System.Text.Json.JsonDocument.Parse(planStream, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
-bool failed = false;
+var failed = false;
 
-foreach(var drift in FindChild(document.RootElement, "resource_drift").EnumerateArray().ToArray()) {
+foreach (var drift in FindChild(document.RootElement, "resource_drift").EnumerateArray().ToArray()) {
 	var address = AssertNotNull(drift.GetProperty("address").GetString());
 	var type = AssertNotNull(drift.GetProperty("type").GetString());
 	var change = FindChild(drift, "change");
@@ -23,7 +23,7 @@ foreach(var drift in FindChild(document.RootElement, "resource_drift").Enumerate
 	var after = FindChild(change, "after");
 	var actions = GetStringArray(FindChild(change, "actions"));
 	if (!Enumerable.SequenceEqual(actions, new[] { "update" })) {
-		Console.WriteLine($"Drift unknown action: {String.Join(", ", actions)}");
+		Console.WriteLine($"Drift unknown action: {string.Join(", ", actions)}");
 		failed = true;
 		continue;
 	}
@@ -32,7 +32,7 @@ foreach(var drift in FindChild(document.RootElement, "resource_drift").Enumerate
 	var policies = GetPolicyElements(policy.permittedDrifts, address, type).SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]).ToArray();
 	//Console.WriteLine(J(policies));
 	Console.WriteLine($"Drift diff: {address} - {type}");
-	foreach(var diff in diffs) {
+	foreach (var diff in diffs) {
 		Console.WriteLine($"Drift diff: {diff.address} - {diff.before} != {diff.after}");
 		var allowed = policies.Any(i => Regex.IsMatch(diff.address, MakeAllStringMatch(i.addressRegex)) && (i.beforeRegex == null || Regex.IsMatch(diff.before, MakeAllStringMatch(i.beforeRegex))) && (i.afterRegex == null || Regex.IsMatch(diff.after, MakeAllStringMatch(i.afterRegex))));
 
@@ -45,7 +45,7 @@ foreach(var drift in FindChild(document.RootElement, "resource_drift").Enumerate
 	}
 }
 
-foreach(var changeI in FindChild(document.RootElement, "resource_changes").EnumerateArray().ToArray()) {
+foreach (var changeI in FindChild(document.RootElement, "resource_changes").EnumerateArray().ToArray()) {
 	var address = changeI.GetProperty("address").GetString()!;
 	var type = changeI.GetProperty("type").GetString()!;
 	var change = FindChild(changeI, "change");
@@ -65,7 +65,7 @@ foreach(var changeI in FindChild(document.RootElement, "resource_changes").Enume
 		} else {
 			var diffs = Diff(type, "", before, after);
 			var itemPolicies = policies.SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]);
-			foreach(var diff in diffs) {
+			foreach (var diff in diffs) {
 				Console.WriteLine($"Update diff: {diff.address} - {diff.before} != {diff.after}");
 				var allowed = itemPolicies.Any(i => ElementMatch(diff, i, before, after));
 
@@ -96,19 +96,19 @@ foreach(var changeI in FindChild(document.RootElement, "resource_changes").Enume
 			Console.WriteLine($"     Allowed");
 		}
 	} else {
-		Console.WriteLine($"Drift unknown action: {String.Join(", ", actions)}");
+		Console.WriteLine($"Drift unknown action: {string.Join(", ", actions)}");
 		failed = true;
 	}
 }
 
-Console.WriteLine($"Final Outcome: {(failed?"DENIED":"Allowed")}");
+Console.WriteLine($"Final Outcome: {(failed ? "DENIED" : "Allowed")}");
 return failed ? 1 : 0;
 
 static bool ElementMatch(DiffItem diffItem, PolicyItem policyItem, JsonElement beforeRoot, JsonElement afterRoot) {
 	var matchA = Regex.Match(diffItem.address, MakeAllStringMatch(policyItem.addressRegex));
 	var match = matchA.Success && (policyItem.beforeRegex == null || Regex.IsMatch(diffItem.before, MakeAllStringMatch(policyItem.beforeRegex))) && (policyItem.afterRegex == null || Regex.IsMatch(diffItem.after, MakeAllStringMatch(policyItem.afterRegex)));
 	if (match) {
-		foreach(var whenItem in policyItem.when ?? new PolicyItemWhen[0]) {
+		foreach (var whenItem in policyItem.when ?? new PolicyItemWhen[0]) {
 			var address = Regex.Replace(whenItem.address, "\\$(\\d+)", (m) => {
 				return matchA.Groups[int.Parse(m.Groups[1].Value)].Value;
 			});
@@ -126,40 +126,40 @@ static bool ElementMatch(DiffItem diffItem, PolicyItem policyItem, JsonElement b
 	return match;
 }
 static JsonElement FindElement(JsonElement root, string path) {
-	if (path == "") return root;
+	if (path == "") {
+		return root;
+	}
+
 	var nextIndex = path.IndexOfAny(new[] { '.', '[', ']' }, 1);
 	var key = nextIndex == -1 ? path.Substring(1) : path.Substring(1, nextIndex - 1);
 	if (path[0] == '.') {
 		var remainder = nextIndex == -1 ? "" : path.Substring(nextIndex);
 		return FindElement(FindChild(root, key), remainder);
 	} else if (path[0] == '[') {
-		var remainder = nextIndex == -1 ? "" : path.Substring(nextIndex+1);
+		var remainder = nextIndex == -1 ? "" : path.Substring(nextIndex + 1);
 		return FindElement(FindChildArray(root, int.Parse(key)), remainder);
 	} else {
 		throw new Exception($"Unknown path: {path}");
 	}
 }
 static PolicyElement[] GetPolicyElements(PolicyElement[]? list, string address, string type) {
-	if (list == null) return new PolicyElement[0];
+	if (list == null) {
+		return new PolicyElement[0];
+	}
+
 	return list.Where(i => Regex.IsMatch(address, MakeAllStringMatch(i.addressRegex)) && Regex.IsMatch(type, MakeAllStringMatch(i.typeRegex))).ToArray();
 }
 
 static string MakeAllStringMatch(string regex) => $"^(?:{regex})$";
 //static string J(object o) => JsonSerializer.Serialize(o, new JsonSerializerOptions { AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip, IncludeFields = true, WriteIndented = true });
 static JsonElement FindChild(JsonElement el, string name) {
-	var r = el.EnumerateObject().Cast<JsonProperty?>().FirstOrDefault(i => i!.Value.Name == name);
-	if (r == null) {
-		throw new Exception($"{name} not found in {el}");
-	}
-	return r.Value.Value;
+	var r = el.EnumerateObject().Cast<JsonProperty?>().FirstOrDefault(i => i!.Value.Name == name) ?? throw new Exception($"{name} not found in {el}");
+	return r.Value;
 };
 
 static JsonElement FindChildArray(JsonElement el, int index) {
-	var r = el.EnumerateArray().Skip(index).Cast<JsonElement?>().FirstOrDefault();
-	if (r == null) {
-		throw new Exception($"{index} not found in {el}");
-	}
-	return r.Value;
+	var r = el.EnumerateArray().Skip(index).Cast<JsonElement?>().FirstOrDefault() ?? throw new Exception($"{index} not found in {el}");
+	return r;
 };
 static string[] GetStringArray(JsonElement el) => el.EnumerateArray().Select(i => i.GetString()!).ToArray();
 static T AssertNotNull<T>([System.Diagnostics.CodeAnalysis.NotNull] T? input, [System.Runtime.CompilerServices.CallerArgumentExpressionAttribute(nameof(input))] string inputStr = null!) {
@@ -189,27 +189,27 @@ static IEnumerable<DiffItem> Diff(string type, string address, JsonElement? befo
 		var beforeItemsD = beforeV.EnumerateArray().ToArray().ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
 		var afterItemsD = afterV.EnumerateArray().ToArray().ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
 		var keys = beforeItemsD.Concat(afterItemsD).Select(i => i.Key).Distinct();
-		foreach(var key in keys) {
+		foreach (var key in keys) {
 			var beforeItems = (beforeItemsD.TryGetValue(key, out var a1) ? a1 : null) ?? new JsonElement[0];
 			var afterItems = (afterItemsD.TryGetValue(key, out var a2) ? a2 : null) ?? new JsonElement[0];
 			var count = Math.Max(beforeItems.Length, afterItems.Length);
-			for(var i = 0; i < count; i++) {
-				foreach(var j in Diff(type, $"{address}[{key}][{i}]", i < beforeItems.Length ? beforeItems[i] : null,  i < afterItems.Length ? afterItems[i] : null)) { yield return j; }
+			for (var i = 0; i < count; i++) {
+				foreach (var j in Diff(type, $"{address}[{key}][{i}]", i < beforeItems.Length ? beforeItems[i] : null, i < afterItems.Length ? afterItems[i] : null)) { yield return j; }
 			}
 		}
 	} else if (beforeV.ValueKind == JsonValueKind.Array) {
 		var beforeItems = beforeV.EnumerateArray().ToArray();
 		var afterItems = afterV.EnumerateArray().ToArray();
 		var count = Math.Max(beforeItems.Length, afterItems.Length);
-		for(var i = 0; i < count; i++) {
-			foreach(var j in Diff(type, $"{address}[{i+1}]", i < beforeItems.Length ? beforeItems[i] : null,  i < afterItems.Length ? afterItems[i] : null)) { yield return j; }
+		for (var i = 0; i < count; i++) {
+			foreach (var j in Diff(type, $"{address}[{i + 1}]", i < beforeItems.Length ? beforeItems[i] : null, i < afterItems.Length ? afterItems[i] : null)) { yield return j; }
 		}
 	} else if (beforeV.ValueKind == JsonValueKind.Object) {
 		var beforeItems = beforeV.EnumerateObject().ToDictionary(i => i.Name, i => i.Value);
 		var afterItems = afterV.EnumerateObject().ToDictionary(i => i.Name, i => i.Value);
 		var keys = beforeItems.Keys.Union(afterItems.Keys);
-		foreach(var key in keys) {
-			foreach(var j in Diff(type, $"{address}.{key}", beforeItems.TryGetValue(key, out var bI) ? bI : null, afterItems.TryGetValue(key, out var aI) ? aI : null)) { yield return j; }
+		foreach (var key in keys) {
+			foreach (var j in Diff(type, $"{address}.{key}", beforeItems.TryGetValue(key, out var bI) ? bI : null, afterItems.TryGetValue(key, out var aI) ? aI : null)) { yield return j; }
 		}
 	} else {
 		var beforeStr = beforeV.ToString();
@@ -220,7 +220,7 @@ static IEnumerable<DiffItem> Diff(string type, string address, JsonElement? befo
 	}
 }
 
-record struct DiffItem(string address, string before, string after) {}
+internal record struct DiffItem(string address, string before, string after) { }
 
 public class Policy {
 	public PolicyElement[]? permittedDrifts;
