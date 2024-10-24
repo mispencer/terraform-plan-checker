@@ -25,14 +25,13 @@ static Policy GetPolicy(string terraformPolicyFileName) {
 
 var document = System.Text.Json.JsonDocument.Parse(planStream, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
 var failed = false;
-
-foreach (var drift in FindChild(document.RootElement, "resource_drift").EnumerateArray().ToArray()) {
+foreach (var drift in FindChild(document.RootElement, "resource_drift")?.EnumerateArray().ToArray() ?? new JsonElement[0]) {
 	var address = AssertNotNull(drift.GetProperty("address").GetString());
 	var type = AssertNotNull(drift.GetProperty("type").GetString());
-	var change = FindChild(drift, "change");
-	var before = FindChild(change, "before");
-	var after = FindChild(change, "after");
-	var actions = GetStringArray(FindChild(change, "actions"));
+	var change = AssertNotNullS(FindChild(drift, "change"));
+	var before = AssertNotNullS(FindChild(change, "before"));
+	var after = AssertNotNullS(FindChild(change, "after"));
+	var actions = GetStringArray(AssertNotNullS(FindChild(change, "actions")));
 	if (!Enumerable.SequenceEqual(actions, new[] { "update" })) {
 		Console.WriteLine($"Drift unknown action: {string.Join(", ", actions)}");
 		failed = true;
@@ -56,13 +55,11 @@ foreach (var drift in FindChild(document.RootElement, "resource_drift").Enumerat
 	}
 }
 
-foreach (var changeI in FindChild(document.RootElement, "resource_changes").EnumerateArray().ToArray()) {
+foreach (var changeI in FindChild(document.RootElement, "resource_changes")?.EnumerateArray().ToArray() ?? new JsonElement[0]) {
 	var address = changeI.GetProperty("address").GetString()!;
 	var type = changeI.GetProperty("type").GetString()!;
-	var change = FindChild(changeI, "change");
-	var before = FindChild(change, "before");
-	var after = FindChild(change, "after");
-	var actions = GetStringArray(FindChild(change, "actions"));
+	var change = AssertNotNullS(FindChild(changeI, "change"));
+	var actions = GetStringArray(AssertNotNullS(FindChild(change, "actions")));
 
 	if (Enumerable.SequenceEqual(actions, new[] { "no-op" }) || Enumerable.SequenceEqual(actions, new[] { "read" })) {
 		continue;
@@ -74,6 +71,8 @@ foreach (var changeI in FindChild(document.RootElement, "resource_changes").Enum
 			Console.WriteLine($"     DENIED");
 			failed = true;
 		} else {
+			var before = AssertNotNullS(FindChild(change, "before"));
+			var after = AssertNotNullS(FindChild(change, "after"));
 			var diffs = Diff(type, "", before, after);
 			var itemPolicies = policies.SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]);
 			foreach (var diff in diffs) {
@@ -145,10 +144,10 @@ static JsonElement FindElement(JsonElement root, string path) {
 	var key = nextIndex == -1 ? path.Substring(1) : path.Substring(1, nextIndex - 1);
 	if (path[0] == '.') {
 		var remainder = nextIndex == -1 ? "" : path.Substring(nextIndex);
-		return FindElement(FindChild(root, key), remainder);
+		return FindElement(AssertNotNullS(FindChild(root, key)), remainder);
 	} else if (path[0] == '[') {
 		var remainder = nextIndex == -1 ? "" : path.Substring(nextIndex + 1);
-		return FindElement(FindChildArray(root, int.Parse(key)), remainder);
+		return FindElement(AssertNotNullS(FindChildArray(root, int.Parse(key))), remainder);
 	} else {
 		throw new Exception($"Unknown path: {path}");
 	}
@@ -163,16 +162,20 @@ static PolicyElement[] GetPolicyElements(PolicyElement[]? list, string address, 
 
 static string MakeAllStringMatch(string regex) => $"^(?:{regex})$";
 //static string J(object o) => JsonSerializer.Serialize(o, new JsonSerializerOptions { AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip, IncludeFields = true, WriteIndented = true });
-static JsonElement FindChild(JsonElement el, string name) {
-	var r = el.EnumerateObject().Cast<JsonProperty?>().FirstOrDefault(i => i!.Value.Name == name) ?? throw new Exception($"{name} not found in {el}");
-	return r.Value;
+static JsonElement? FindChild(JsonElement el, string name) {
+	return el.EnumerateObject().Cast<JsonProperty?>().FirstOrDefault(i => i!.Value.Name == name)?.Value;
 };
 
-static JsonElement FindChildArray(JsonElement el, int index) {
-	var r = el.EnumerateArray().Skip(index).Cast<JsonElement?>().FirstOrDefault() ?? throw new Exception($"{index} not found in {el}");
-	return r;
+static JsonElement? FindChildArray(JsonElement el, int index) {
+	return el.EnumerateArray().Skip(index).Cast<JsonElement?>().FirstOrDefault();
 };
 static string[] GetStringArray(JsonElement el) => el.EnumerateArray().Select(i => i.GetString()!).ToArray();
+static T AssertNotNullS<T>([System.Diagnostics.CodeAnalysis.NotNull] T? input, [System.Runtime.CompilerServices.CallerArgumentExpressionAttribute(nameof(input))] string inputStr = null!) where T : struct {
+	if (input == null) {
+		throw new ArgumentNullException(inputStr);
+	}
+	return input.Value;
+}
 static T AssertNotNull<T>([System.Diagnostics.CodeAnalysis.NotNull] T? input, [System.Runtime.CompilerServices.CallerArgumentExpressionAttribute(nameof(input))] string inputStr = null!) {
 	if (input == null) {
 		throw new ArgumentNullException(inputStr);
@@ -196,7 +199,7 @@ static IEnumerable<DiffItem> Diff(string type, string address, JsonElement? befo
 	var beforeV = before.Value;
 	var afterV = after.Value;
 	if (type == "helm_release" && address == ".set") {
-		static string getName(JsonElement i) => FindChild(i, "name").GetString()!;
+		static string getName(JsonElement i) => AssertNotNullS(FindChild(i, "name")).GetString()!;
 		var beforeItemsD = beforeV.EnumerateArray().ToArray().ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
 		var afterItemsD = afterV.EnumerateArray().ToArray().ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
 		var keys = beforeItemsD.Concat(afterItemsD).Select(i => i.Key).Distinct();
