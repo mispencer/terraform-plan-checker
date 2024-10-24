@@ -2,15 +2,21 @@
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
-if (args.Length != 2 || args.Length > 0 && (args[0] == "--help" || args[0] == "-h")) {
-	Console.Write("Expected arguments: [terraformPlanFileName] [terraformPolicyFileName]");
+if (args.Length < 2 || args.Length > 0 && (args[0] == "--help" || args[0] == "-h")) {
+	Console.Write("Expected arguments: [terraformPlanFileName] [terraformPolicyFileName1] [terraformPolicyFileName2] [terraformPolicyFileName3]...");
 	return 2;
 }
 var terraformPlanFileName = args[0];
-var terraformPolicyFileName = args[1];
+var terraformPolicyFileNames = args.Skip(1);
 var planStream = new FileStream(terraformPlanFileName, FileMode.Open, FileAccess.Read);
-var policy = GetPolicy(terraformPolicyFileName);
-[System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode", Justification = "This appears to be a bug?")]
+var inputPolicies = terraformPolicyFileNames.Select(GetPolicy).ToArray();
+var policy = new Policy {
+	permittedCreates = inputPolicies.SelectMany(i => i.permittedCreates).ToArray(),
+	permittedDeletes = inputPolicies.SelectMany(i => i.permittedDeletes).ToArray(),
+	permittedUpdates = inputPolicies.SelectMany(i => i.permittedUpdates).ToArray(),
+	permittedDrifts = inputPolicies.SelectMany(i => i.permittedDrifts).ToArray(),
+};
+[System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode", Justification = "Supplying JsonSerializerOptions with TypeInfoResolver should suppress this warning. This appears to be a bug?")]
 static Policy GetPolicy(string terraformPolicyFileName) {
 	var policyStream = new FileStream(terraformPolicyFileName, FileMode.Open, FileAccess.Read);
 	return JsonSerializer.Deserialize<Policy>(policyStream, new JsonSerializerOptions { AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip, IncludeFields = true, TypeInfoResolver = SourceGenerationContext.Default })!;
