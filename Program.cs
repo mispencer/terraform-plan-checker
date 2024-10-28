@@ -22,6 +22,11 @@ static Policy GetPolicy(string terraformPolicyFileName) {
 	var policyStream = new FileStream(terraformPolicyFileName, FileMode.Open, FileAccess.Read);
 	return JsonSerializer.Deserialize<Policy>(policyStream, new JsonSerializerOptions { AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip, IncludeFields = true, TypeInfoResolver = SourceGenerationContext.Default })!;
 }
+
+[System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode", Justification = "String is fine to reference")]
+static void ReplaceNodeWithString(JsonValue node, string value) {
+	node.ReplaceWith(JsonValue.Create(value));
+}
 //Console.WriteLine(J(policy));
 
 var document = AssertNotNull(System.Text.Json.Nodes.JsonNode.Parse(planStream, null, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }));
@@ -35,6 +40,8 @@ foreach (var drift in FindChild(document, "resource_drift")?.AsArray().ToArray()
 	var change = AssertNotNull(FindChild(drift, "change"));
 	var before = AssertNotNull(FindChild(change, "before"));
 	var after = AssertNotNull(FindChild(change, "after"));
+	var beforeSensitive = AssertNotNull(FindChild(change, "before_sensitive"));
+	var afterSensitive = AssertNotNull(FindChild(change, "after_sensitive"));
 	var actions = GetStringArray(AssertNotNull(FindChild(change, "actions")));
 	if (!Enumerable.SequenceEqual(actions, new[] { "update" })) {
 		Console.WriteLine($"Drift unknown action: {string.Join(", ", actions)}");
@@ -43,7 +50,7 @@ foreach (var drift in FindChild(document, "resource_drift")?.AsArray().ToArray()
 	}
 
 
-	var diffs = Diff(type, "", before, after);
+	var diffs = Diff(type, "", before, after, beforeSensitive, afterSensitive);
 	var policies = GetPolicyElements(policy.permittedDrifts, address, type).SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]).ToArray();
 	//Console.WriteLine(J(policies));
 	Console.WriteLine($"Drift diff: {address} - {type}");
@@ -83,7 +90,9 @@ foreach (var changeI in changes) {
 		} else {
 			var before = AssertNotNull(FindChild(change, "before"));
 			var after = AssertNotNull(FindChild(change, "after"));
-			var diffs = Diff(type, "", before, after);
+			var beforeSensitive = AssertNotNull(FindChild(change, "before_sensitive"));
+			var afterSensitive = AssertNotNull(FindChild(change, "after_sensitive"));
+			var diffs = Diff(type, "", before, after, beforeSensitive, afterSensitive);
 			var itemPolicies = policies.SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]);
 			foreach (var diff in diffs) {
 				Console.WriteLine($"Update diff: {diff.address} - {diff.before} != {diff.after}");
@@ -124,17 +133,43 @@ foreach (var changeI in changes) {
 Console.WriteLine($"Final Outcome: {(failed ? "DENIED" : "Allowed")}");
 return failed ? 1 : 0;
 
-//static object MaskSensitive(string path, JsonNode input, JsonNode sensitiveSource) {
-//	var sensitiveMask = FindElement(sensitiveSource, path);
-//	if (sensitiveMask == null) {
-//		return input;
-//	}
-//	var masked = input.Clone();
-//	input.TryGetProperty
-//	if (sensitiveMask.Value.ValueKind == JsonValueKind.True) {
-//	}
-//	return input;
-//}
+static JsonNode MaskSensitive(JsonNode input, JsonNode sensitiveMask) {
+	if (sensitiveMask == null) {
+		return input;
+	}
+	var masked = input.DeepClone();
+	void WalkAndMask(JsonNode input, JsonNode? sensitiveMask) {
+		if (input is JsonObject inputO) {
+			if (sensitiveMask != null && sensitiveMask is JsonObject sensitiveMaskO) {
+				foreach(var inputI in inputO.ToArray()) {
+					if (inputI.Value != null) {
+						var sensitiveMaskI = sensitiveMaskO[inputI.Key];
+						WalkAndMask(inputI.Value, sensitiveMaskI);
+					}
+				}
+			}
+		} else if (input is JsonArray inputA) {
+			if (sensitiveMask != null && sensitiveMask is JsonArray sensitiveMaskA) {
+				for(var index = 0; index < inputA.Count; index++) {
+					var inputI = inputA[index];
+					if (inputI != null) {
+						var sensitiveMaskI = index < sensitiveMaskA.Count ? sensitiveMaskA[index] : null;
+						WalkAndMask(inputI, sensitiveMaskI);
+					}
+				}
+			}
+		} else if (input is JsonValue inputV) {
+			if (sensitiveMask != null && sensitiveMask is JsonValue sensitiveMaskV && sensitiveMaskV.TryGetValue<bool>(out var sensitiveMaskB) && sensitiveMaskB) {
+				ReplaceNodeWithString(inputV, "(sensitive value)");
+			}
+		}
+
+	}
+	if (sensitiveMask != null) {
+		WalkAndMask(input, sensitiveMask);
+	}
+	return input;
+}
 
 static bool ElementMatch(DiffItem diffItem, PolicyItem policyItem, JsonNode beforeRoot, JsonNode afterRoot) {
 	var matchA = Regex.Match(diffItem.address, MakeAllStringMatch(policyItem.addressRegex));
@@ -201,52 +236,68 @@ static T AssertNotNull<T>([System.Diagnostics.CodeAnalysis.NotNull] T? input, [S
 //[System.Diagnostics.CodeAnalysis.DoesNotReturn]
 //static void ThrowE(string label, string address) => throw new Exception($"{label} at {address}");
 
-static IEnumerable<DiffItem> Diff(string type, string address, JsonNode? before, JsonNode? after) {
+static IEnumerable<DiffItem> Diff(string type, string address, JsonNode? before, JsonNode? after, JsonNode? beforeSensitive, JsonNode? afterSensitive) {
+	var beforeMasked = before != null ? MaskSensitive(before, AssertNotNull(beforeSensitive)) : null;
+	var afterMasked = after != null ? MaskSensitive(after, AssertNotNull(afterSensitive)) : null;
+	return DiffMask(type, address, before, after, beforeMasked, afterMasked);
+}
+static T? GetValueOrDefault<T>(T[] input, int index) => index < input.Length ? input[index] : default(T);
+static T? GetValueOrDefaultS<T>(T[] input, int index) where T : struct => index < input.Length ? input[index] : default(T);
+static IEnumerable<DiffItem> DiffMask(string type, string address, JsonNode? before, JsonNode? after, JsonNode? beforeMasked, JsonNode? afterMasked) {
 	if (before == null || after == null || before.GetValueKind() != after.GetValueKind()) {
 		if (before == null) {
 			if (after == null) {
+				// Actually no diff
 			} else {
-				yield return new DiffItem(address, "NULL", AssertNotNull(after.ToString()));
+				yield return new DiffItem(address, "NULL", (string)AssertNotNull(after.ToString()));
 			}
 		} else if (after == null) {
-			yield return new DiffItem(address, AssertNotNull(before.ToString()), "NULL");
+			yield return new DiffItem(address, (string)AssertNotNull(before.ToString()), "NULL");
 		} else {
-			yield return new DiffItem(address, before.GetValueKind().ToString(), after.GetValueKind().ToString());
+			yield return new DiffItem(address, (string)before.GetValueKind().ToString(), (string)after.GetValueKind().ToString());
 		}
 		yield break;
 	}
-	var beforeV = before;
-	var afterV = after;
+	AssertNotNull(beforeMasked);
+	AssertNotNull(afterMasked);
 	if (type == "helm_release" && address == ".set") {
-		static string getName(JsonNode? i) => AssertNotNull(FindChild(AssertNotNull(i), "name")).AsValue().GetValue<string>();
-		var beforeItemsD = beforeV.AsArray().ToArray().ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
-		var afterItemsD = afterV.AsArray().ToArray().ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
+		static string getName((JsonNode?,int) i) => AssertNotNull(FindChild(AssertNotNull(i.Item1), "name")).AsValue().GetValue<string>();
+		var beforeItemsD = before.AsArray().ToArray().Cast<JsonNode>().Select((i,j) => (i,j)).ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
+		var afterItemsD = after.AsArray().ToArray().Cast<JsonNode>().Select((i,j) => (i,j)).ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
+		var beforeMaskedItems = beforeMasked.AsArray().ToArray();
+		var afterMaskedItems = afterMasked.AsArray().ToArray();
 		var keys = beforeItemsD.Concat(afterItemsD).Select(i => i.Key).Distinct();
 		foreach (var key in keys) {
-			var beforeItems = (beforeItemsD.TryGetValue(key, out var a1) ? a1 : null) ?? new JsonNode[0];
-			var afterItems = (afterItemsD.TryGetValue(key, out var a2) ? a2 : null) ?? new JsonNode[0];
+			var beforeItems = (beforeItemsD.TryGetValue(key, out var a1) ? a1 : null) ?? new (JsonNode,int)[0];
+			var afterItems = (afterItemsD.TryGetValue(key, out var a2) ? a2 : null) ?? new (JsonNode,int)[0];
 			var count = Math.Max(beforeItems.Length, afterItems.Length);
 			for (var i = 0; i < count; i++) {
-				foreach (var j in Diff(type, $"{address}[{key}][{i}]", i < beforeItems.Length ? beforeItems[i] : null, i < afterItems.Length ? afterItems[i] : null)) { yield return j; }
+				var beforeI = GetValueOrDefaultS(beforeItems, i);
+				var afterI = GetValueOrDefaultS(afterItems, i);
+				foreach (var j in DiffMask(type, $"{address}[{key}][{i}]", beforeI?.i, afterI?.i, beforeI != null ? GetValueOrDefault(beforeMaskedItems, beforeI.Value.j) : null, afterI != null ? GetValueOrDefault(afterMaskedItems, afterI.Value.j) : null)) { yield return j; }
 			}
 		}
-	} else if (beforeV is JsonArray beforeA) {
+	} else if (before is JsonArray beforeA) {
 		var beforeItems = beforeA.ToArray();
-		var afterItems = afterV.AsArray().ToArray();
+		var afterItems = after.AsArray().ToArray();
+		var beforeMaskedItems = beforeMasked.AsArray().ToArray();
+		var afterMaskedItems = afterMasked.AsArray().ToArray();
 		var count = Math.Max(beforeItems.Length, afterItems.Length);
 		for (var i = 0; i < count; i++) {
-			foreach (var j in Diff(type, $"{address}[{i + 1}]", i < beforeItems.Length ? beforeItems[i] : null, i < afterItems.Length ? afterItems[i] : null)) { yield return j; }
+			foreach (var j in DiffMask(type, $"{address}[{i + 1}]", GetValueOrDefault(beforeItems, i), GetValueOrDefault(afterItems, i), GetValueOrDefault(beforeMaskedItems, i), GetValueOrDefault(afterMaskedItems, i))) { yield return j; }
 		}
-	} else if (beforeV is JsonObject beforeO ) {
+	} else if (before is JsonObject beforeO ) {
 		var beforeItems = beforeO.ToDictionary(i => i.Key, i => i.Value);
-		var afterItems = afterV.AsObject().ToDictionary(i => i.Key, i => i.Value);;
+		var afterItems = after.AsObject().ToDictionary(i => i.Key, i => i.Value);
+		var beforeMaskedItems = beforeMasked.AsObject().ToDictionary(i => i.Key, i => i.Value);;
+		var afterMaskedItems = afterMasked.AsObject().ToDictionary(i => i.Key, i => i.Value);;
 		var keys = beforeItems.Keys.Union(afterItems.Keys);
 		foreach (var key in keys) {
-			foreach (var j in Diff(type, $"{address}.{key}", beforeItems.TryGetValue(key, out var bI) ? bI : null, afterItems.TryGetValue(key, out var aI) ? aI : null)) { yield return j; }
+			foreach (var j in DiffMask(type, $"{address}.{key}", beforeItems.GetValueOrDefault(key), afterItems.GetValueOrDefault(key), beforeMaskedItems.GetValueOrDefault(key), afterMaskedItems.GetValueOrDefault(key))) { yield return j; }
 		}
 	} else {
-		var beforeStr = beforeV.ToString();
-		var afterStr = afterV.ToString();
+		var beforeStr = before.ToString();
+		var afterStr = after.ToString();
 		if (beforeStr != afterStr) {
 			yield return new DiffItem(address, beforeStr, afterStr);
 		}
@@ -257,6 +308,7 @@ internal record struct DiffItem(string address, string before, string after) { }
 
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(Policy))]
+[JsonSerializable(typeof(string))]
 internal partial class SourceGenerationContext : JsonSerializerContext { }
 
 public class Policy {
