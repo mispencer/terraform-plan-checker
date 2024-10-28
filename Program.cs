@@ -25,6 +25,8 @@ static Policy GetPolicy(string terraformPolicyFileName) {
 
 var document = System.Text.Json.JsonDocument.Parse(planStream, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
 var failed = false;
+
+var changes = FindChild(document.RootElement, "resource_changes")?.EnumerateArray().ToArray() ?? new JsonElement[0];
 foreach (var drift in FindChild(document.RootElement, "resource_drift")?.EnumerateArray().ToArray() ?? new JsonElement[0]) {
 	var address = AssertNotNull(drift.GetProperty("address").GetString());
 	var type = AssertNotNull(drift.GetProperty("type").GetString());
@@ -38,10 +40,15 @@ foreach (var drift in FindChild(document.RootElement, "resource_drift")?.Enumera
 		continue;
 	}
 
+
 	var diffs = Diff(type, "", before, after);
 	var policies = GetPolicyElements(policy.permittedDrifts, address, type).SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]).ToArray();
 	//Console.WriteLine(J(policies));
 	Console.WriteLine($"Drift diff: {address} - {type}");
+	if (changes.Any(i => i.GetProperty("address").GetString() == address && GetStringArray(AssertNotNullS(FindChild(AssertNotNullS(FindChild(i, "change")), "actions"))).Contains("delete"))) {
+		Console.WriteLine($"Ignoring drift on resource being deleted");
+		continue;
+	}
 	foreach (var diff in diffs) {
 		Console.WriteLine($"Drift diff: {diff.address} - {diff.before} != {diff.after}");
 		var allowed = policies.Any(i => Regex.IsMatch(diff.address, MakeAllStringMatch(i.addressRegex)) && (i.beforeRegex == null || Regex.IsMatch(diff.before, MakeAllStringMatch(i.beforeRegex))) && (i.afterRegex == null || Regex.IsMatch(diff.after, MakeAllStringMatch(i.afterRegex))));
@@ -55,7 +62,7 @@ foreach (var drift in FindChild(document.RootElement, "resource_drift")?.Enumera
 	}
 }
 
-foreach (var changeI in FindChild(document.RootElement, "resource_changes")?.EnumerateArray().ToArray() ?? new JsonElement[0]) {
+foreach (var changeI in changes) {
 	var address = changeI.GetProperty("address").GetString()!;
 	var type = changeI.GetProperty("type").GetString()!;
 	var change = AssertNotNullS(FindChild(changeI, "change"));
