@@ -14,8 +14,9 @@ var inputPolicies = terraformPolicyFileNames.Select(GetPolicy).ToArray();
 var policy = new Policy {
 	permittedCreates = inputPolicies.SelectMany(i => i.permittedCreates ?? new PolicyElement[0]).ToArray(),
 	permittedDeletes = inputPolicies.SelectMany(i => i.permittedDeletes ?? new PolicyElement[0]).ToArray(),
-	permittedUpdates = inputPolicies.SelectMany(i => i.permittedUpdates ?? new PolicyElement[0]).ToArray(),
-	permittedDrifts = inputPolicies.SelectMany(i => i.permittedDrifts ?? new PolicyElement[0]).ToArray(),
+	permittedUpdates = inputPolicies.SelectMany(i => i.permittedUpdates ?? new PolicyElementUpdate[0]).ToArray(),
+	permittedDrifts = inputPolicies.SelectMany(i => i.permittedDrifts ?? new PolicyElementUpdate[0]).ToArray(),
+	permittedDriftDeletes = inputPolicies.SelectMany(i => i.permittedDriftDeletes ?? new PolicyElement[0]).ToArray(),
 };
 [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("ReflectionAnalysis", "IL2026:RequiresUnreferencedCode", Justification = "Supplying JsonSerializerOptions with TypeInfoResolver should suppress this warning. This appears to be a bug?")]
 static Policy GetPolicy(string terraformPolicyFileName) {
@@ -33,41 +34,52 @@ var document = AssertNotNull(System.Text.Json.Nodes.JsonNode.Parse(planStream, n
 var failed = false;
 
 var changes = FindChild(document, "resource_changes")?.AsArray().ToArray() ?? new JsonNode[0];
-foreach (var drift in FindChild(document, "resource_drift")?.AsArray().ToArray() ?? new JsonNode[0]) {
-	AssertNotNull(drift);
-	var address = AssertNotNull(AssertNotNull(drift["address"]).GetValue<string>());
-	var type = AssertNotNull(AssertNotNull(drift["type"]).GetValue<string>());
-	var change = AssertNotNull(FindChild(drift, "change"));
-	var before = AssertNotNull(FindChild(change, "before"));
-	var after = AssertNotNull(FindChild(change, "after"));
-	var beforeSensitive = AssertNotNull(FindChild(change, "before_sensitive"));
-	var afterSensitive = AssertNotNull(FindChild(change, "after_sensitive"));
-	var actions = GetStringArray(AssertNotNull(FindChild(change, "actions")));
-	if (!Enumerable.SequenceEqual(actions, new[] { "update" })) {
-		Console.WriteLine($"Drift unknown action: {string.Join(", ", actions)}");
-		failed = true;
-		continue;
-	}
+foreach (var (drift,index) in (FindChild(document, "resource_drift")?.AsArray().ToArray() ?? new JsonNode[0]).Select((i,j) => (i,j))) {
+	try {
+		AssertNotNull(drift);
+		var address = AssertNotNull(AssertNotNull(drift["address"]).GetValue<string>());
+		var type = AssertNotNull(AssertNotNull(drift["type"]).GetValue<string>());
+		var change = AssertNotNull(FindChild(drift, "change"));
+		var actions = GetStringArray(AssertNotNull(FindChild(change, "actions")));
+		Console.WriteLine($"Drift diff: {address} - {type}");
+		if (Enumerable.SequenceEqual(actions, new[] { "update" })) {
+			var before = AssertNotNull(FindChild(change, "before"));
+			var after = AssertNotNull(FindChild(change, "after"));
+			var beforeSensitive = AssertNotNull(FindChild(change, "before_sensitive"));
+			var afterSensitive = AssertNotNull(FindChild(change, "after_sensitive"));
+			var diffs = Diff(type, "", before, after, beforeSensitive, afterSensitive);
+			var policies = GetPolicyElements(policy.permittedDrifts, address, type).SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]).ToArray();
+			//Console.WriteLine(J(policies));
+			if (changes.Any(i => AssertNotNull(AssertNotNull(i)["address"]).GetValue<string>() == address && GetStringArray(AssertNotNull(FindChild(AssertNotNull(FindChild(i, "change")), "actions"))).Contains("delete"))) {
+				Console.WriteLine($"Ignoring drift on resource being deleted");
+				continue;
+			}
+			foreach (var diff in diffs) {
+				Console.WriteLine($"Drift diff: {diff.address} - {diff.before} != {diff.after}");
+				var allowed = policies.Any(i => Regex.IsMatch(diff.address, MakeAllStringMatch(i.addressRegex)) && (i.beforeRegex == null || Regex.IsMatch(diff.before, MakeAllStringMatch(i.beforeRegex))) && (i.afterRegex == null || Regex.IsMatch(diff.after, MakeAllStringMatch(i.afterRegex))));
 
-
-	var diffs = Diff(type, "", before, after, beforeSensitive, afterSensitive);
-	var policies = GetPolicyElements(policy.permittedDrifts, address, type).SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]).ToArray();
-	//Console.WriteLine(J(policies));
-	Console.WriteLine($"Drift diff: {address} - {type}");
-	if (changes.Any(i => AssertNotNull(AssertNotNull(i)["address"]).GetValue<string>() == address && GetStringArray(AssertNotNull(FindChild(AssertNotNull(FindChild(i, "change")), "actions"))).Contains("delete"))) {
-		Console.WriteLine($"Ignoring drift on resource being deleted");
-		continue;
-	}
-	foreach (var diff in diffs) {
-		Console.WriteLine($"Drift diff: {diff.address} - {diff.before} != {diff.after}");
-		var allowed = policies.Any(i => Regex.IsMatch(diff.address, MakeAllStringMatch(i.addressRegex)) && (i.beforeRegex == null || Regex.IsMatch(diff.before, MakeAllStringMatch(i.beforeRegex))) && (i.afterRegex == null || Regex.IsMatch(diff.after, MakeAllStringMatch(i.afterRegex))));
-
-		if (allowed) {
-			Console.WriteLine($"   Allowed");
+				if (allowed) {
+					Console.WriteLine($"   Allowed");
+				} else {
+					Console.WriteLine($"   DENIED");
+					failed = true;
+				}
+			}
+		} else if (Enumerable.SequenceEqual(actions, new[] { "delete" })) {
+			var policies = GetPolicyElements(policy.permittedDriftDeletes, address, type).ToArray();
+			if (!policies.Any()) {
+				Console.WriteLine($"     DENIED");
+				failed = true;
+			} else {
+				Console.WriteLine($"     Allowed");
+			}
 		} else {
-			Console.WriteLine($"   DENIED");
+			Console.WriteLine($"Drift unknown action: {string.Join(", ", actions)}");
 			failed = true;
+			continue;
 		}
+	} catch (Exception e) {
+		throw new Exception($"Error on draft {index}", e);
 	}
 }
 
@@ -209,9 +221,9 @@ static JsonNode? FindElement(JsonNode root, string path) {
 		return null;
 	}
 }
-static PolicyElement[] GetPolicyElements(PolicyElement[]? list, string address, string type) {
+static T[] GetPolicyElements<T>(T[]? list, string address, string type) where T : PolicyElement {
 	if (list == null) {
-		return new PolicyElement[0];
+		return new T[0];
 	}
 
 	return list.Where(i => Regex.IsMatch(address, MakeAllStringMatch(i.addressRegex)) && Regex.IsMatch(type, MakeAllStringMatch(i.typeRegex))).ToArray();
@@ -312,15 +324,19 @@ internal record struct DiffItem(string address, string before, string after) { }
 internal partial class SourceGenerationContext : JsonSerializerContext { }
 
 public class Policy {
-	public PolicyElement[]? permittedDrifts;
+	public PolicyElementUpdate[]? permittedDrifts;
+	public PolicyElement[]? permittedDriftDeletes;
 	public PolicyElement[]? permittedDeletes;
 	public PolicyElement[]? permittedCreates;
-	public PolicyElement[]? permittedUpdates;
+	public PolicyElementUpdate[]? permittedUpdates;
 }
 
 public class PolicyElement {
 	public required string addressRegex;
 	public required string typeRegex;
+}
+
+public class PolicyElementUpdate : PolicyElement {
 	public PolicyItem[]? permittedUpdates;
 }
 
