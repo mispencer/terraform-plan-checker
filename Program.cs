@@ -178,9 +178,9 @@ static JsonNode MaskSensitive(JsonNode input, JsonNode sensitiveMask) {
 
 	}
 	if (sensitiveMask != null) {
-		WalkAndMask(input, sensitiveMask);
+		WalkAndMask(masked, sensitiveMask);
 	}
-	return input;
+	return masked;
 }
 
 static bool ElementMatch(DiffItem diffItem, PolicyItem policyItem, JsonNode beforeRoot, JsonNode afterRoot) {
@@ -261,10 +261,10 @@ static IEnumerable<DiffItem> DiffMask(string type, string address, JsonNode? bef
 			if (after == null) {
 				// Actually no diff
 			} else {
-				yield return new DiffItem(address, "NULL", (string)AssertNotNull(after.ToString()));
+				yield return new DiffItem(address, "NULL", (string)AssertNotNull(AssertNotNull(afterMasked).ToString()));
 			}
 		} else if (after == null) {
-			yield return new DiffItem(address, (string)AssertNotNull(before.ToString()), "NULL");
+			yield return new DiffItem(address, (string)AssertNotNull(AssertNotNull(beforeMasked).ToString()), "NULL");
 		} else {
 			yield return new DiffItem(address, (string)before.GetValueKind().ToString(), (string)after.GetValueKind().ToString());
 		}
@@ -311,7 +311,7 @@ static IEnumerable<DiffItem> DiffMask(string type, string address, JsonNode? bef
 		var beforeStr = before.ToString();
 		var afterStr = after.ToString();
 		if (beforeStr != afterStr) {
-			yield return new DiffItem(address, beforeStr, afterStr);
+			yield return new DiffItem(address, beforeMasked.ToString(), afterMasked.ToString());
 		}
 	}
 }
