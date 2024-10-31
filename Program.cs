@@ -272,7 +272,7 @@ static IEnumerable<DiffItem> DiffMask(string type, string address, JsonNode? bef
 	}
 	AssertNotNull(beforeMasked);
 	AssertNotNull(afterMasked);
-	if (type == "helm_release" && address == ".set") {
+	if (type == "helm_release" && (address == ".set" || address == ".set_sensitive")) {
 		static string getName((JsonNode?,int) i) => AssertNotNull(FindChild(AssertNotNull(i.Item1), "name")).AsValue().GetValue<string>();
 		var beforeItemsD = before.AsArray().ToArray().Cast<JsonNode>().Select((i,j) => (i,j)).ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
 		var afterItemsD = after.AsArray().ToArray().Cast<JsonNode>().Select((i,j) => (i,j)).ToLookup(getName).ToDictionary(i => i.Key, i => i.ToArray());
