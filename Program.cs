@@ -152,20 +152,20 @@ static JsonNode MaskSensitive(JsonNode input, JsonNode sensitiveMask) {
 	var masked = input.DeepClone();
 	void WalkAndMask(JsonNode input, JsonNode? sensitiveMask) {
 		if (input is JsonObject inputO) {
-			if (sensitiveMask != null && sensitiveMask is JsonObject sensitiveMaskO) {
+			if (sensitiveMask != null && (sensitiveMask is JsonObject || sensitiveMask is JsonValue)) {
 				foreach(var inputI in inputO.ToArray()) {
 					if (inputI.Value != null) {
-						var sensitiveMaskI = sensitiveMaskO[inputI.Key];
+						var sensitiveMaskI = sensitiveMask is JsonObject sensitiveMaskO ? sensitiveMaskO[inputI.Key] : sensitiveMask;
 						WalkAndMask(inputI.Value, sensitiveMaskI);
 					}
 				}
 			}
 		} else if (input is JsonArray inputA) {
-			if (sensitiveMask != null && sensitiveMask is JsonArray sensitiveMaskA) {
+			if (sensitiveMask != null && (sensitiveMask is JsonArray || sensitiveMask is JsonValue)) {
 				for(var index = 0; index < inputA.Count; index++) {
 					var inputI = inputA[index];
 					if (inputI != null) {
-						var sensitiveMaskI = index < sensitiveMaskA.Count ? sensitiveMaskA[index] : null;
+						var sensitiveMaskI = sensitiveMask is JsonArray sensitiveMaskA ? index < sensitiveMaskA.Count ? sensitiveMaskA[index] : null : sensitiveMask;
 						WalkAndMask(inputI, sensitiveMaskI);
 					}
 				}
