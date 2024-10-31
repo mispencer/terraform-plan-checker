@@ -41,8 +41,8 @@ foreach (var (drift,index) in (FindChild(document, "resource_drift")?.AsArray().
 		var type = AssertNotNull(AssertNotNull(drift["type"]).GetValue<string>());
 		var change = AssertNotNull(FindChild(drift, "change"));
 		var actions = GetStringArray(AssertNotNull(FindChild(change, "actions")));
-		Console.WriteLine($"Drift diff: {address} - {type}");
 		if (Enumerable.SequenceEqual(actions, new[] { "update" })) {
+			Console.WriteLine($"Drift update: {address} - {type}");
 			var before = AssertNotNull(FindChild(change, "before"));
 			var after = AssertNotNull(FindChild(change, "after"));
 			var beforeSensitive = AssertNotNull(FindChild(change, "before_sensitive"));
@@ -51,21 +51,22 @@ foreach (var (drift,index) in (FindChild(document, "resource_drift")?.AsArray().
 			var policies = GetPolicyElements(policy.permittedDrifts, address, type).SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]).ToArray();
 			//Console.WriteLine(J(policies));
 			if (changes.Any(i => AssertNotNull(AssertNotNull(i)["address"]).GetValue<string>() == address && GetStringArray(AssertNotNull(FindChild(AssertNotNull(FindChild(i, "change")), "actions"))).Contains("delete"))) {
-				Console.WriteLine($"Ignoring drift on resource being deleted");
+				Console.WriteLine($"- Ignoring drift on resource being deleted");
 				continue;
 			}
 			foreach (var diff in diffs) {
-				Console.WriteLine($"Drift diff: {diff.address} - {diff.before} != {diff.after}");
+				Console.WriteLine($"- Drift diff: {diff.address} - {diff.before} != {diff.after}");
 				var allowed = policies.Any(i => Regex.IsMatch(diff.address, MakeAllStringMatch(i.addressRegex)) && (i.beforeRegex == null || Regex.IsMatch(diff.before, MakeAllStringMatch(i.beforeRegex))) && (i.afterRegex == null || Regex.IsMatch(diff.after, MakeAllStringMatch(i.afterRegex))));
 
 				if (allowed) {
-					Console.WriteLine($"   Allowed");
+					Console.WriteLine($"-   Allowed");
 				} else {
-					Console.WriteLine($"   DENIED");
+					Console.WriteLine($"-   DENIED");
 					failed = true;
 				}
 			}
 		} else if (Enumerable.SequenceEqual(actions, new[] { "delete" })) {
+			Console.WriteLine($"Drift delete: {address} - {type}");
 			var policies = GetPolicyElements(policy.permittedDriftDeletes, address, type).ToArray();
 			if (!policies.Any()) {
 				Console.WriteLine($"     DENIED");
@@ -107,13 +108,13 @@ foreach (var changeI in changes) {
 			var diffs = Diff(type, "", before, after, beforeSensitive, afterSensitive);
 			var itemPolicies = policies.SelectMany(i => i.permittedUpdates ?? new PolicyItem[0]);
 			foreach (var diff in diffs) {
-				Console.WriteLine($"Update diff: {diff.address} - {diff.before} != {diff.after}");
+				Console.WriteLine($"- Update diff: {diff.address} - {diff.before} != {diff.after}");
 				var allowed = itemPolicies.Any(i => ElementMatch(diff, i, before, after));
 
 				if (allowed) {
-					Console.WriteLine($"   Allowed");
+					Console.WriteLine($"-   Allowed");
 				} else {
-					Console.WriteLine($"   DENIED");
+					Console.WriteLine($"-   DENIED");
 					failed = true;
 				}
 			}
